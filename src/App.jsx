@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-const STORAGE_KEY = "kildekritik-analysis-v3";
+const STORAGE_KEY = "kildekritik-analysis-v4";
 
 const CATEGORY_LIBRARY = [
   {
@@ -168,6 +168,87 @@ function createSource(index = 1) {
     categories: CATEGORY_LIBRARY.map((category) => ({ ...category })),
     annotations: [],
     order: index,
+  };
+}
+
+function createTimelineData(annotation, sourceText) {
+  const excerpt = getAnnotationExcerpt(annotation, sourceText);
+  return {
+    title: excerpt.length > 72 ? `${excerpt.slice(0, 69).trimEnd()}...` : excerpt,
+    dateLabel: "",
+    sortYear: "",
+    endYear: "",
+    note: "",
+  };
+}
+
+function normalizeCategory(category, index) {
+  const fallback = CATEGORY_LIBRARY[index];
+  return {
+    id: category?.id ?? fallback?.id ?? uid("category"),
+    name: category?.name ?? fallback?.name ?? "Kategori",
+    color: category?.color ?? fallback?.color ?? "#94a3b8",
+    guide: category?.guide ?? fallback?.guide ?? "",
+    questions: Array.isArray(category?.questions) ? category.questions : fallback?.questions ?? [],
+    relatedConcepts: Array.isArray(category?.relatedConcepts)
+      ? category.relatedConcepts
+      : fallback?.relatedConcepts ?? [],
+    summary: typeof category?.summary === "string" ? category.summary : "",
+  };
+}
+
+function normalizeAnnotation(annotation, sourceText) {
+  const timeline = annotation?.timeline && typeof annotation.timeline === "object"
+    ? {
+        title: typeof annotation.timeline.title === "string" ? annotation.timeline.title : "",
+        dateLabel: typeof annotation.timeline.dateLabel === "string" ? annotation.timeline.dateLabel : "",
+        sortYear:
+          annotation.timeline.sortYear === "" || Number.isFinite(Number(annotation.timeline.sortYear))
+            ? annotation.timeline.sortYear
+            : "",
+        endYear:
+          annotation.timeline.endYear === "" || Number.isFinite(Number(annotation.timeline.endYear))
+            ? annotation.timeline.endYear
+            : "",
+        note: typeof annotation.timeline.note === "string" ? annotation.timeline.note : "",
+      }
+    : null;
+
+  return {
+    ...annotation,
+    comment: typeof annotation?.comment === "string" ? annotation.comment : "",
+    timeline,
+  };
+}
+
+function normalizeSource(source, index) {
+  return {
+    id: source?.id ?? `source-${uid("tab")}`,
+    title: typeof source?.title === "string" ? source.title : "",
+    problemStatement: typeof source?.problemStatement === "string" ? source.problemStatement : "",
+    finalAnalysis: typeof source?.finalAnalysis === "string" ? source.finalAnalysis : "",
+    sourceMode: source?.sourceMode === "pdf" ? "pdf" : "text",
+    sourceText: typeof source?.sourceText === "string" ? source.sourceText : "",
+    categories:
+      Array.isArray(source?.categories) && source.categories.length
+        ? source.categories.map((category, categoryIndex) => normalizeCategory(category, categoryIndex))
+        : CATEGORY_LIBRARY.map((category) => ({ ...category })),
+    annotations: Array.isArray(source?.annotations)
+      ? source.annotations.map((annotation) => normalizeAnnotation(annotation, source?.sourceText ?? ""))
+      : [],
+    order: Number.isFinite(Number(source?.order)) ? Number(source.order) : index + 1,
+  };
+}
+
+function normalizeAnalysisState(raw) {
+  const rawSources = Array.isArray(raw?.sources) && raw.sources.length ? raw.sources : [createSource(1)];
+  const sources = rawSources.map((source, index) => normalizeSource(source, index));
+  const activeSourceId = sources.find((source) => source.id === raw?.activeSourceId)?.id ?? sources[0].id;
+
+  return {
+    title: typeof raw?.title === "string" ? raw.title : "",
+    sources,
+    activeSourceId,
   };
 }
 
@@ -459,7 +540,7 @@ function App() {
     }
 
     try {
-      const parsed = JSON.parse(raw);
+      const parsed = normalizeAnalysisState(JSON.parse(raw));
       if (!parsed?.sources?.length) {
         setIsHydrated(true);
         return;
@@ -617,6 +698,53 @@ function App() {
     () => splitTextForPrint(currentSource.sourceText, currentSource.annotations, annotationNumbers),
     [currentSource.annotations, currentSource.sourceText, annotationNumbers],
   );
+
+  const timelineEntries = useMemo(() => {
+    const entries = [];
+
+    analysis.sources.forEach((source, sourceIndex) => {
+      source.annotations.forEach((annotation) => {
+        if (!annotation.timeline) {
+          return;
+        }
+
+        const category = source.categories.find((item) => item.id === annotation.categoryId);
+
+        entries.push({
+          id: annotation.id,
+          sourceId: source.id,
+          sourceIndex,
+          sourceTitle: source.title || `Kilde ${sourceIndex + 1}`,
+          categoryName: category?.name ?? "Kategori",
+          color: category?.color ?? "#94a3b8",
+          excerpt: getAnnotationExcerpt(annotation, source.sourceText),
+          comment: annotation.comment,
+          timeline: {
+            ...annotation.timeline,
+            sortYear: annotation.timeline.sortYear === "" ? null : Number(annotation.timeline.sortYear),
+            endYear: annotation.timeline.endYear === "" ? null : Number(annotation.timeline.endYear),
+          },
+        });
+      });
+    });
+
+    return entries.sort((a, b) => {
+      const yearA = a.timeline.sortYear ?? Number.POSITIVE_INFINITY;
+      const yearB = b.timeline.sortYear ?? Number.POSITIVE_INFINITY;
+
+      if (yearA !== yearB) {
+        return yearA - yearB;
+      }
+
+      if (a.sourceIndex !== b.sourceIndex) {
+        return a.sourceIndex - b.sourceIndex;
+      }
+
+      return a.timeline.title.localeCompare(b.timeline.title, "da");
+    });
+  }, [analysis.sources]);
+
+  const timelineReadyCount = timelineEntries.filter((entry) => entry.timeline.dateLabel.trim()).length;
 
   const pageRegionAnnotations = useMemo(() => {
     const regions = new Map();
@@ -797,12 +925,12 @@ function App() {
     }
 
     if (mode === "replace" && selectedAnnotation?.type === "text") {
-      updateAnalysis((current) => ({
-        ...current,
-        annotations: current.annotations
+      updateCurrentSource((source) => ({
+        ...source,
+        annotations: source.annotations
           .map((annotation) =>
             annotation.id === selectedAnnotation.id
-              ? { ...annotation, start: offsets.start, end: offsets.end }
+              ? { ...annotation, start: offsets.start, end: offsets.end, pageIndex, pdfRects }
               : annotation,
           )
           .sort((a, b) => (a.start ?? 0) - (b.start ?? 0)),
@@ -831,6 +959,7 @@ function App() {
       pageIndex,
       pdfRects,
       comment: "",
+      timeline: null,
     };
 
     updateCurrentSource((source) => ({
@@ -849,6 +978,41 @@ function App() {
       annotations: source.annotations.map((annotation) =>
         annotation.id === annotationId ? { ...annotation, comment } : annotation,
       ),
+    }));
+  }
+
+  function toggleAnnotationTimeline(annotationId) {
+    updateCurrentSource((source) => ({
+      ...source,
+      annotations: source.annotations.map((annotation) => {
+        if (annotation.id !== annotationId) {
+          return annotation;
+        }
+
+        return {
+          ...annotation,
+          timeline: annotation.timeline ? null : createTimelineData(annotation, source.sourceText),
+        };
+      }),
+    }));
+  }
+
+  function updateAnnotationTimeline(annotationId, changes) {
+    updateCurrentSource((source) => ({
+      ...source,
+      annotations: source.annotations.map((annotation) => {
+        if (annotation.id !== annotationId || !annotation.timeline) {
+          return annotation;
+        }
+
+        return {
+          ...annotation,
+          timeline: {
+            ...annotation.timeline,
+            ...changes,
+          },
+        };
+      }),
     }));
   }
 
@@ -1028,11 +1192,12 @@ function App() {
       width,
       height,
       comment: "",
+      timeline: null,
     };
 
-    updateAnalysis((current) => ({
-      ...current,
-      annotations: [...current.annotations, newAnnotation],
+    updateCurrentSource((source) => ({
+      ...source,
+      annotations: [...source.annotations, newAnnotation],
     }));
     setSelectedAnnotationId(newAnnotation.id);
     setOpenCategoryId(activeCategory.id);
@@ -1395,6 +1560,42 @@ function App() {
             </section>
           );
         })}
+
+        {timelineEntries.length ? (
+          <section className="print-source-block print-timeline-block">
+            <header className="print-sheet-header">
+              <div>
+                <p className="panel-label">På tværs af kilder</p>
+                <h2>Tidslinje</h2>
+                <p className="print-problem">
+                  Markeringer fra flere kilder sat i rækkefølge, så udvikling, forløb og påstande kan ses samlet.
+                </p>
+              </div>
+            </header>
+
+            <section className="print-timeline">
+              {timelineEntries.map((entry) => (
+                <article
+                  key={`print-timeline-${entry.id}`}
+                  className="print-timeline-item"
+                  style={{ "--timeline-color": entry.color }}
+                >
+                  <div className="print-timeline-year">
+                    {entry.timeline.dateLabel.trim() ||
+                      (entry.timeline.sortYear != null ? String(entry.timeline.sortYear) : "Uden tid")}
+                  </div>
+                  <div className="print-timeline-content">
+                    <h4>{entry.timeline.title || entry.excerpt}</h4>
+                    <p className="print-timeline-meta">
+                      <strong>{entry.sourceTitle}</strong> · {entry.categoryName}
+                    </p>
+                    <p>{entry.timeline.note || entry.comment || entry.excerpt}</p>
+                  </div>
+                </article>
+              ))}
+            </section>
+          </section>
+        ) : null}
       </section>
 
       <section className="workspace">
@@ -1774,6 +1975,13 @@ function App() {
                                   <button
                                     type="button"
                                     className="ghost-button"
+                                    onClick={() => toggleAnnotationTimeline(annotation.id)}
+                                  >
+                                    {annotation.timeline ? "Fjern fra tidslinje" : "Til tidslinje"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="ghost-button"
                                     onClick={() => setSelectedAnnotationId(annotation.id)}
                                   >
                                     Vis i kilden
@@ -1786,6 +1994,58 @@ function App() {
                                     Slet
                                   </button>
                                 </div>
+
+                                {annotation.timeline ? (
+                                  <div className="timeline-inline-editor">
+                                    <label className="mini-field">
+                                      <span>Visning på tidslinje</span>
+                                      <input
+                                        value={annotation.timeline.title}
+                                        onChange={(event) =>
+                                          updateAnnotationTimeline(annotation.id, { title: event.target.value })
+                                        }
+                                        placeholder="Kort overskrift til tidslinjen"
+                                      />
+                                    </label>
+
+                                    <div className="timeline-inline-grid">
+                                      <label className="mini-field">
+                                        <span>Dato / periode</span>
+                                        <input
+                                          value={annotation.timeline.dateLabel}
+                                          onChange={(event) =>
+                                            updateAnnotationTimeline(annotation.id, { dateLabel: event.target.value })
+                                          }
+                                          placeholder="Fx: 9. april 1940"
+                                        />
+                                      </label>
+
+                                      <label className="mini-field">
+                                        <span>Sorteringsår</span>
+                                        <input
+                                          type="number"
+                                          value={annotation.timeline.sortYear}
+                                          onChange={(event) =>
+                                            updateAnnotationTimeline(annotation.id, { sortYear: event.target.value })
+                                          }
+                                          placeholder="1940"
+                                        />
+                                      </label>
+                                    </div>
+
+                                    <label className="mini-field">
+                                      <span>Forklaring</span>
+                                      <textarea
+                                        rows={3}
+                                        value={annotation.timeline.note}
+                                        onChange={(event) =>
+                                          updateAnnotationTimeline(annotation.id, { note: event.target.value })
+                                        }
+                                        placeholder="Skriv kort, hvorfor denne markering er vigtig i forløbet."
+                                      />
+                                    </label>
+                                  </div>
+                                ) : null}
                               </article>
                             );
                           })
@@ -1823,6 +2083,52 @@ function App() {
             />
           </section>
         </aside>
+      </section>
+
+      <section className="timeline-board">
+        <div className="timeline-board-header">
+          <div>
+            <p className="panel-label">Tidslinje</p>
+            <h2>Byg et forløb på tværs af kilderne</h2>
+            <p className="guide-note">
+              Send markeringer til tidslinjen fra analysepanelet. Markeringer fra <strong>Indhold / påstande</strong> er ofte gode kandidater, men du kan bruge alle kategorier.
+            </p>
+          </div>
+          <div className="timeline-summary-card">
+            <span>Klar til tidslinje</span>
+            <strong>{timelineEntries.length}</strong>
+            <small>{timelineReadyCount} med udfyldt dato eller periode</small>
+          </div>
+        </div>
+
+        {timelineEntries.length ? (
+          <div className="timeline-rail">
+            {timelineEntries.map((entry) => (
+              <article
+                key={`timeline-${entry.id}`}
+                className="timeline-event-card"
+                style={{ "--timeline-color": entry.color }}
+              >
+                <div className="timeline-year-pill">
+                  {entry.timeline.dateLabel.trim() ||
+                    (entry.timeline.sortYear != null ? String(entry.timeline.sortYear) : "Uden tid")}
+                </div>
+                <div className="timeline-event-content">
+                  <h3>{entry.timeline.title || entry.excerpt}</h3>
+                  <p className="timeline-event-meta">
+                    <strong>{entry.sourceTitle}</strong> · {entry.categoryName}
+                  </p>
+                  <p>{entry.timeline.note || entry.comment || entry.excerpt}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="timeline-empty">
+            <p>Ingen markeringer er sendt til tidslinjen endnu.</p>
+            <p>Brug knappen <strong>Til tidslinje</strong> under en markering i analysepanelet.</p>
+          </div>
+        )}
       </section>
     </div>
   );

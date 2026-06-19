@@ -520,6 +520,7 @@ function App() {
   const [statusMessage, setStatusMessage] = useState("");
   const [isImportPanelOpen, setIsImportPanelOpen] = useState(true);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [isTimelineOpen, setIsTimelineOpen] = useState(false);
   const [expandedGuideIds, setExpandedGuideIds] = useState(() => new Set());
   const [interactionMode, setInteractionMode] = useState("select");
   const [dragState, setDragState] = useState(null);
@@ -1299,6 +1300,13 @@ function App() {
           <button type="button" className="secondary-button" onClick={() => setIsGuideOpen((current) => !current)}>
             {isGuideOpen ? "Skjul guide" : "Åbn guide"}
           </button>
+          <button
+            type="button"
+            className={isTimelineOpen ? "primary-button" : "secondary-button"}
+            onClick={() => setIsTimelineOpen((current) => !current)}
+          >
+            {isTimelineOpen ? "Skjul tidslinje" : `Åbn tidslinje${timelineEntries.length ? ` (${timelineEntries.length})` : ""}`}
+          </button>
           <button type="button" className="secondary-button" onClick={clearAnalysis}>
             Clear all
           </button>
@@ -1394,6 +1402,54 @@ function App() {
               </article>
             ))}
           </div>
+        </section>
+      ) : null}
+
+      {isTimelineOpen ? (
+        <section className="timeline-board timeline-board-top">
+          <div className="timeline-board-header">
+            <div>
+              <p className="panel-label">Tidslinje</p>
+              <h2>Byg et forløb på tværs af kilderne</h2>
+              <p className="guide-note">
+                Brug tidslinjen, når kronologi eller udvikling er vigtig. Markeringer fra <strong>Indhold / påstande</strong> er ofte gode kandidater, men du kan bruge alle kategorier.
+              </p>
+            </div>
+            <div className="timeline-summary-card">
+              <span>Klar til tidslinje</span>
+              <strong>{timelineEntries.length}</strong>
+              <small>{timelineReadyCount} med udfyldt dato eller periode</small>
+            </div>
+          </div>
+
+          {timelineEntries.length ? (
+            <div className="timeline-rail">
+              {timelineEntries.map((entry) => (
+                <article
+                  key={`timeline-${entry.id}`}
+                  className="timeline-event-card"
+                  style={{ "--timeline-color": entry.color }}
+                >
+                  <div className="timeline-year-pill">
+                    {entry.timeline.dateLabel.trim() ||
+                      (entry.timeline.sortYear != null ? String(entry.timeline.sortYear) : "Uden tid")}
+                  </div>
+                  <div className="timeline-event-content">
+                    <h3>{entry.timeline.title || entry.excerpt}</h3>
+                    <p className="timeline-event-meta">
+                      <strong>{entry.sourceTitle}</strong> · {entry.categoryName}
+                    </p>
+                    <p>{entry.timeline.note || entry.comment || entry.excerpt}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="timeline-empty">
+              <p>Ingen markeringer er sendt til tidslinjen endnu.</p>
+              <p>Brug knappen <strong>Til tidslinje</strong> under en markering i analysepanelet, hvis kronologi er relevant for din analyse.</p>
+            </div>
+          )}
         </section>
       ) : null}
 
@@ -2085,51 +2141,6 @@ function App() {
         </aside>
       </section>
 
-      <section className="timeline-board">
-        <div className="timeline-board-header">
-          <div>
-            <p className="panel-label">Tidslinje</p>
-            <h2>Byg et forløb på tværs af kilderne</h2>
-            <p className="guide-note">
-              Send markeringer til tidslinjen fra analysepanelet. Markeringer fra <strong>Indhold / påstande</strong> er ofte gode kandidater, men du kan bruge alle kategorier.
-            </p>
-          </div>
-          <div className="timeline-summary-card">
-            <span>Klar til tidslinje</span>
-            <strong>{timelineEntries.length}</strong>
-            <small>{timelineReadyCount} med udfyldt dato eller periode</small>
-          </div>
-        </div>
-
-        {timelineEntries.length ? (
-          <div className="timeline-rail">
-            {timelineEntries.map((entry) => (
-              <article
-                key={`timeline-${entry.id}`}
-                className="timeline-event-card"
-                style={{ "--timeline-color": entry.color }}
-              >
-                <div className="timeline-year-pill">
-                  {entry.timeline.dateLabel.trim() ||
-                    (entry.timeline.sortYear != null ? String(entry.timeline.sortYear) : "Uden tid")}
-                </div>
-                <div className="timeline-event-content">
-                  <h3>{entry.timeline.title || entry.excerpt}</h3>
-                  <p className="timeline-event-meta">
-                    <strong>{entry.sourceTitle}</strong> · {entry.categoryName}
-                  </p>
-                  <p>{entry.timeline.note || entry.comment || entry.excerpt}</p>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="timeline-empty">
-            <p>Ingen markeringer er sendt til tidslinjen endnu.</p>
-            <p>Brug knappen <strong>Til tidslinje</strong> under en markering i analysepanelet.</p>
-          </div>
-        )}
-      </section>
     </div>
   );
 }

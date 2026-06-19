@@ -791,6 +791,10 @@ input:focus {
   box-shadow: 0 12px 40px rgba(43, 61, 84, 0.08);
 }
 
+.timeline-board-top {
+  margin-bottom: 1rem;
+}
+
 .timeline-board-header {
   display: flex;
   justify-content: space-between;
@@ -944,6 +948,11 @@ input:focus {
   .timeline-event-card {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .timeline-summary-card {
+    min-width: 0;
+    width: 100%;
   }
 }
 

@@ -23,6 +23,7 @@ const EXTRA_CATEGORY_COLORS = [
   "#10b981",
 ];
 const FOOTER_GITHUB_URL = "https://github.com/lymbots/Kildekritik";
+const FOOTER_LICENSE_URL = "https://polyformproject.org/licenses/noncommercial/1.0.0/";
 
 const CATEGORY_LIBRARY = [
   {
@@ -2454,13 +2455,16 @@ function App() {
         <div className="site-footer-copy">
           <p className="panel-label">Om siden</p>
           <p>
-            Udviklet af Asger Krogh til undervisningsrelateret, ikke-kommerciel brug. Værktøjet er målrettet gymnasieelever i historiefaget og er tænkt som støtte til tekstnær og kildekritisk analyse.
+            Udviklet af Asger Krogh. Kildekritik stilles til rådighed under licensen PolyForm Noncommercial 1.0.0, så ikke-kommerciel brug er tilladt efter licensens vilkår. Værktøjet er målrettet gymnasieelever i historiefaget og er tænkt som støtte til tekstnær og kildekritisk analyse.
           </p>
           <p>
-            Siden stilles til rådighed i sin nuværende form uden garanti. Kontakt gerne Asger, hvis du vil bruge siden videre, har forslag eller opdager fejl.
+            Siden stilles til rådighed i sin nuværende form uden garanti. Kommerciel brug kræver en særskilt aftale med Asger Krogh. Kontakt gerne ved spørgsmål, forslag eller fejl.
           </p>
         </div>
         <div className="site-footer-links">
+          <a href={FOOTER_LICENSE_URL} target="_blank" rel="noreferrer">
+            Licens
+          </a>
           <a href={FOOTER_GITHUB_URL} target="_blank" rel="noreferrer">
             GitHub
           </a>

@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-const STORAGE_KEY = "kildekritik-analysis-v4";
+const STORAGE_KEY = "kildekritik-analysis-v5";
+const DOCX_MIME =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const PDF_RENDER_OPTIONS = {
+  cMapUrl: `${import.meta.env.BASE_URL}cmaps/`,
+  cMapPacked: true,
+  standardFontDataUrl: `${import.meta.env.BASE_URL}standard_fonts/`,
+  useSystemFonts: true,
+};
 
 const CATEGORY_LIBRARY = [
   {
@@ -217,6 +225,7 @@ function normalizeAnnotation(annotation, sourceText) {
   return {
     ...annotation,
     comment: typeof annotation?.comment === "string" ? annotation.comment : "",
+    quote: typeof annotation?.quote === "string" ? annotation.quote : "",
     timeline,
   };
 }
@@ -265,7 +274,22 @@ function sortAnnotationsForOutput(annotations) {
     }
 
     if (a.type === "text") {
-      return a.start - b.start;
+      if (Array.isArray(a.pdfRects) || Array.isArray(b.pdfRects)) {
+        if ((a.pageIndex ?? 0) !== (b.pageIndex ?? 0)) {
+          return (a.pageIndex ?? 0) - (b.pageIndex ?? 0);
+        }
+
+        const rectA = a.pdfRects?.[0];
+        const rectB = b.pdfRects?.[0];
+        if (rectA && rectB && rectA.y !== rectB.y) {
+          return rectA.y - rectB.y;
+        }
+        if (rectA && rectB && rectA.x !== rectB.x) {
+          return rectA.x - rectB.x;
+        }
+      }
+
+      return (a.start ?? 0) - (b.start ?? 0);
     }
 
     if (a.pageIndex !== b.pageIndex) {
@@ -286,6 +310,17 @@ function uid(prefix) {
 
 function normalizeText(text) {
   return text.replace(/\r\n/g, "\n");
+}
+
+function normalizeSelectionText(text) {
+  return normalizeText(text)
+    .replace(/\u0000/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getFileTitle(name) {
+  return name.replace(/\.[^.]+$/, "").trim();
 }
 
 function getSelectionOffsets(root, selection) {
@@ -386,10 +421,37 @@ function splitTextForPrint(text, annotations, annotationNumbers) {
 
 function getAnnotationExcerpt(annotation, sourceText) {
   if (annotation.type === "text") {
-    return sourceText.slice(annotation.start, annotation.end).trim() || "Tom markering";
+    if (annotation.quote?.trim()) {
+      return annotation.quote.trim();
+    }
+
+    if (typeof annotation.start === "number" && typeof annotation.end === "number") {
+      return sourceText.slice(annotation.start, annotation.end).trim() || "Tom markering";
+    }
+
+    return "Tekstmarkering";
   }
 
   return `Visuel markering på side ${annotation.pageIndex + 1}`;
+}
+
+function getAnnotationLabel(annotation, sourceText, annotationNumbers) {
+  if (annotation.type === "region") {
+    const number = annotationNumbers?.get(annotation.id);
+    return number
+      ? `Overstregning ${number} · side ${annotation.pageIndex + 1}`
+      : `Overstregning · side ${annotation.pageIndex + 1}`;
+  }
+
+  if (annotation.type === "text" && annotation.quote?.trim()) {
+    return annotation.quote.trim();
+  }
+
+  if (typeof annotation.start === "number" && typeof annotation.end === "number") {
+    return sourceText.slice(annotation.start, annotation.end).trim() || "Tom markering";
+  }
+
+  return "Tekstmarkering";
 }
 
 function getTextPieceSegments(pieceText, pieceStart, annotations) {
@@ -444,7 +506,10 @@ async function loadPdfDocument(file) {
   pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
 
   const buffer = await file.arrayBuffer();
-  const pdf = await pdfjs.getDocument({ data: buffer }).promise;
+  const pdf = await pdfjs.getDocument({
+    data: buffer,
+    ...PDF_RENDER_OPTIONS,
+  }).promise;
 
   const pages = [];
   let fullText = "";
@@ -461,7 +526,10 @@ async function loadPdfDocument(file) {
 
     await page.render({ canvasContext: context, viewport }).promise;
 
-    const content = await page.getTextContent();
+    const content = await page.getTextContent({
+      includeMarkedContent: true,
+      disableNormalization: true,
+    });
     let pageHasText = false;
 
     content.items.forEach((item) => {
@@ -531,6 +599,7 @@ function App() {
 
   const currentSource =
     analysis.sources.find((source) => source.id === analysis.activeSourceId) ?? analysis.sources[0];
+  const projectTitle = analysis.title.trim();
   const currentDocumentPages = sourceDocuments[analysis.activeSourceId] ?? [];
 
   useEffect(() => {
@@ -587,7 +656,7 @@ function App() {
         return;
       }
 
-      const pdfjs = await import("pdfjs-dist");
+      const { TextLayerBuilder } = await import("pdfjs-dist/web/pdf_viewer.mjs");
 
       for (const page of currentDocumentPages) {
         const container = pdfTextLayerRefs.current.get(page.pageIndex);
@@ -595,22 +664,24 @@ function App() {
           continue;
         }
 
-        container.innerHTML = "";
-        const textLayer = new pdfjs.TextLayer({
-          textContentSource: page.pdfPage.streamTextContent({
-            includeMarkedContent: true,
-            disableNormalization: true,
-          }),
-          container,
-          viewport: page.viewport,
+        container.replaceChildren();
+
+        const textLayer = new TextLayerBuilder({
+          pdfPage: page.pdfPage,
+          onAppend: (textLayerDiv) => {
+            container.replaceChildren(textLayerDiv);
+          },
         });
 
         cleanups.push(() => {
-          container.innerHTML = "";
+          textLayer.cancel();
+          container.replaceChildren();
         });
 
         try {
-          await textLayer.render();
+          await textLayer.render({
+            viewport: page.viewport,
+          });
         } catch {
           if (!isCancelled) {
             setStatusMessage("Tekstlaget på PDF'en kunne ikke vises korrekt.");
@@ -792,7 +863,7 @@ function App() {
   }
 
   function handleFieldChange(field, value) {
-    if (field === "title") {
+    if (field === "projectTitle") {
       updateAnalysis((current) => ({
         ...current,
         title: value,
@@ -812,11 +883,20 @@ function App() {
       ...source,
       sourceMode: "text",
       sourceText: normalized,
-      annotations: source.annotations.filter(
-        (annotation) => annotation.type !== "text" || annotation.end <= normalized.length,
-      ),
+      annotations: source.annotations.filter((annotation) => {
+        if (annotation.type !== "text") {
+          return false;
+        }
+
+        return (
+          typeof annotation.start === "number" &&
+          typeof annotation.end === "number" &&
+          annotation.end <= normalized.length
+        );
+      }),
     }));
     setCurrentDocumentPages([]);
+    setInteractionMode("select");
   }
 
   async function handleFileImport(event) {
@@ -835,11 +915,14 @@ function App() {
     }
 
     try {
+      const inferredTitle = getFileTitle(file.name);
+
       if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
         const pdfData = await loadPdfDocument(file);
 
         updateCurrentSource((source) => ({
           ...source,
+          title: source.title.trim() ? source.title : inferredTitle,
           sourceMode: "pdf",
           sourceText: pdfData.fullText,
           annotations: source.annotations.filter(
@@ -858,19 +941,38 @@ function App() {
         return;
       }
 
+      const isDocx = file.type === DOCX_MIME || file.name.toLowerCase().endsWith(".docx");
       const lowerName = file.name.toLowerCase();
       const isPlainText =
         file.type === "text/plain" ||
         lowerName.endsWith(".txt") ||
         lowerName.endsWith(".md");
 
+      if (isDocx) {
+        const mammoth = await import("mammoth");
+        const buffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+        handleSourceTextChange(result.value);
+        updateCurrentSource((source) => ({
+          ...source,
+          title: source.title.trim() ? source.title : inferredTitle,
+        }));
+        setIsImportPanelOpen(false);
+        setStatusMessage("Word-fil er importeret som tekst.");
+        return;
+      }
+
       if (!isPlainText) {
-        setStatusMessage("Upload understøtter lige nu PDF og rene tekstfiler.");
+        setStatusMessage("Upload understøtter PDF, DOCX og rene tekstfiler.");
         return;
       }
 
       const text = await file.text();
       handleSourceTextChange(text);
+      updateCurrentSource((source) => ({
+        ...source,
+        title: source.title.trim() ? source.title : inferredTitle,
+      }));
       setIsImportPanelOpen(false);
       setStatusMessage("Tekstfil er importeret.");
     } catch {
@@ -880,19 +982,13 @@ function App() {
 
   function addTextAnnotationFromSelection(mode = "create") {
     const selection = window.getSelection();
-    const offsets = getSelectionOffsets(sourceSurfaceRef.current, selection);
-
-    if (!offsets || !activeCategory) {
+    if (!selection || selection.rangeCount === 0 || !activeCategory) {
       setStatusMessage("Markér først tekst i kilden.");
       return;
     }
 
-    const selectedText = currentSource.sourceText.slice(offsets.start, offsets.end).trim();
-    if (!selectedText) {
-      setStatusMessage("Tom markering blev ignoreret.");
-      return;
-    }
-
+    let offsets = null;
+    let selectedText = "";
     let pdfRects = null;
     let pageIndex = null;
 
@@ -907,6 +1003,12 @@ function App() {
       }
 
       pageIndex = Number(startFrame.dataset.pageIndex);
+      selectedText = normalizeSelectionText(selection.toString());
+      if (!selectedText) {
+        setStatusMessage("Tom markering blev ignoreret.");
+        return;
+      }
+
       const frameRect = startFrame.getBoundingClientRect();
       const rects = Array.from(range.getClientRects())
         .filter((rect) => rect.width > 1 && rect.height > 1)
@@ -923,6 +1025,19 @@ function App() {
       }
 
       pdfRects = rects;
+    } else {
+      offsets = getSelectionOffsets(sourceSurfaceRef.current, selection);
+
+      if (!offsets) {
+        setStatusMessage("Markér først tekst i kilden.");
+        return;
+      }
+
+      selectedText = currentSource.sourceText.slice(offsets.start, offsets.end).trim();
+      if (!selectedText) {
+        setStatusMessage("Tom markering blev ignoreret.");
+        return;
+      }
     }
 
     if (mode === "replace" && selectedAnnotation?.type === "text") {
@@ -931,7 +1046,14 @@ function App() {
         annotations: source.annotations
           .map((annotation) =>
             annotation.id === selectedAnnotation.id
-              ? { ...annotation, start: offsets.start, end: offsets.end, pageIndex, pdfRects }
+              ? {
+                  ...annotation,
+                  start: offsets?.start ?? annotation.start,
+                  end: offsets?.end ?? annotation.end,
+                  pageIndex,
+                  pdfRects,
+                  quote: currentSource.sourceMode === "pdf" ? selectedText : annotation.quote,
+                }
               : annotation,
           )
           .sort((a, b) => (a.start ?? 0) - (b.start ?? 0)),
@@ -941,10 +1063,12 @@ function App() {
       return;
     }
 
-    const overlap = currentSource.annotations.some(
-      (annotation) =>
-        annotation.type === "text" && offsets.start < annotation.end && offsets.end > annotation.start,
-    );
+    const overlap =
+      currentSource.sourceMode !== "pdf" &&
+      currentSource.annotations.some(
+        (annotation) =>
+          annotation.type === "text" && offsets.start < annotation.end && offsets.end > annotation.start,
+      );
 
     if (overlap) {
       setStatusMessage("Overlappende markeringer er ikke klar endnu.");
@@ -955,10 +1079,11 @@ function App() {
       id: uid("annotation"),
       type: "text",
       categoryId: activeCategory.id,
-      start: offsets.start,
-      end: offsets.end,
+      start: offsets?.start ?? null,
+      end: offsets?.end ?? null,
       pageIndex,
       pdfRects,
+      quote: currentSource.sourceMode === "pdf" ? selectedText : "",
       comment: "",
       timeline: null,
     };
@@ -1122,8 +1247,10 @@ function App() {
 
   function printAnalysis() {
     const previousTitle = document.title;
-    const safeTitle = currentSource.title?.trim()
-      ? currentSource.title.trim().replace(/\s+/g, "_")
+    const safeTitle = projectTitle
+      ? projectTitle.replace(/\s+/g, "_")
+      : currentSource.title?.trim()
+        ? currentSource.title.trim().replace(/\s+/g, "_")
       : "uden_titel";
     document.title = `Kildekritik_${safeTitle}`;
     window.print();
@@ -1288,12 +1415,12 @@ function App() {
       <header className="hero">
         <div className="hero-copy">
           <p className="eyebrow">Tekstnær kildekritik</p>
-          <h1>Markér kilden, knyt tekststeder til begreber, og saml analysen løbende</h1>
+          <h1>Kod kilder direkte i teksten</h1>
           <p className="intro">
-            Et analyseværktøj til gymnasiet, hvor du koder teksten i kategorier og bruger markeringerne til at bygge din analyse trin for trin.
+            Vælg en kategori, markér i kilden, og skriv din kommentar i panelet.
           </p>
           <p className="intro intro-subtle">
-            Du behøver ikke bruge alle kategorier. Du kan slette dem, du ikke har brug for, og tilføje nye undervejs.
+            Brug PDF med tekstlag, DOCX eller indsæt tekst direkte. Scannede PDF&apos;er markeres manuelt.
           </p>
         </div>
         <div className="hero-actions hero-actions-stacked">
@@ -1318,11 +1445,20 @@ function App() {
 
       <section className="setup-grid">
         <label className="field-card">
-          <span className="field-label">Titel</span>
+          <span className="field-label">Forløb / emne</span>
+          <input
+            value={analysis.title}
+            onChange={(event) => handleFieldChange("projectTitle", event.target.value)}
+            placeholder="Fx: Kold krig og propaganda"
+          />
+        </label>
+
+        <label className="field-card">
+          <span className="field-label">{`Kildetitel · Kilde ${analysis.sources.findIndex((source) => source.id === currentSource.id) + 1}`}</span>
           <input
             value={currentSource.title}
             onChange={(event) => handleFieldChange("title", event.target.value)}
-            placeholder="Fx: Dagbog om besættelsen"
+            placeholder="Fx: Tale af Kennedy"
           />
         </label>
 
@@ -1338,20 +1474,26 @@ function App() {
       </section>
 
       <section className="source-tabs-card">
-        <div className="source-tabs">
-          {analysis.sources.map((source, index) => (
-            <button
-              key={source.id}
-              type="button"
-              className={["source-tab", source.id === analysis.activeSourceId ? "is-active" : ""]
-                .filter(Boolean)
-                .join(" ")}
-              onClick={() => switchSource(source.id)}
-            >
-              {`Kilde ${index + 1}`}
-              {source.title?.trim() ? `: ${source.title.trim()}` : ""}
-            </button>
-          ))}
+        <div className="source-tabs-wrap">
+          <div>
+            <p className="panel-label">Kilder</p>
+            <p className="source-tabs-note">Tilføj og navngiv de 4-6 kilder, der hører til samme opgave.</p>
+          </div>
+          <div className="source-tabs">
+            {analysis.sources.map((source, index) => (
+              <button
+                key={source.id}
+                type="button"
+                className={["source-tab", source.id === analysis.activeSourceId ? "is-active" : ""]
+                  .filter(Boolean)
+                  .join(" ")}
+                onClick={() => switchSource(source.id)}
+              >
+                {`Kilde ${index + 1}`}
+                {source.title?.trim() ? `: ${source.title.trim()}` : ""}
+              </button>
+            ))}
+          </div>
         </div>
         <button type="button" className="secondary-button" onClick={addSource}>
           Ny kilde
@@ -1454,6 +1596,14 @@ function App() {
       ) : null}
 
       <section className="print-sheet">
+        {projectTitle ? (
+          <header className="print-project-header">
+            <p className="panel-label">Kildesæt</p>
+            <h1>{projectTitle}</h1>
+            <p>{`${analysis.sources.length} kilder`}</p>
+          </header>
+        ) : null}
+
         {analysis.sources.map((source, sourceIndex) => {
           const sourcePages = sourceDocuments[source.id] ?? [];
           const sourceOrderedAnnotations = sortAnnotationsForOutput(source.annotations);
@@ -1585,7 +1735,7 @@ function App() {
                               <span className="print-note-badge">{sourceNumbers.get(annotation.id)}</span>
                               <div>
                                 <strong>{category?.name ?? "Kategori"}</strong>
-                                <p>{getAnnotationExcerpt(annotation, source.sourceText)}</p>
+                                <p>{getAnnotationLabel(annotation, source.sourceText, sourceNumbers)}</p>
                               </div>
                             </div>
                             <p>{annotation.comment || "Ingen kommentar skrevet endnu."}</p>
@@ -1687,21 +1837,21 @@ function App() {
                   {isImportPanelOpen ? "Skjul import / redigering" : "Vis import / redigering"}
                 </button>
                 <label className="upload-button">
-                  Upload tekst eller PDF
+                  Upload tekst, DOCX eller PDF
                   <input
                     type="file"
-                    accept=".txt,.md,.pdf,text/plain,application/pdf"
+                    accept=".txt,.md,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     onChange={handleFileImport}
                   />
                 </label>
               </div>
               <div className="dropzone-copy">
-                <strong>Træk en PDF eller tekstfil ind her</strong>
+                <strong>Træk en PDF, DOCX eller tekstfil ind her</strong>
                 <p>Du kan også klikke og vælge en fil.</p>
               </div>
             </div>
             <p className="import-note">
-              Indsæt tekst direkte, eller upload en PDF. Hvis PDF&apos;en har tekstlag, kan du markere i den. Ellers kan du bruge tegnemarkering.
+              PDF med tekstlag kan markeres direkte. Scannede PDF&apos;er markeres manuelt.
             </p>
           </section>
 
@@ -1712,7 +1862,7 @@ function App() {
                 value={currentSource.sourceText}
                 onChange={(event) => handleSourceTextChange(event.target.value)}
                 placeholder="Indsæt kilden her."
-                rows={10}
+                rows={8}
               />
             </label>
           ) : null}
@@ -1790,7 +1940,7 @@ function App() {
                             pdfTextLayerRefs.current.delete(page.pageIndex);
                           }
                         }}
-                        className="pdf-text-layer textLayer"
+                        className="pdf-text-layer"
                         aria-label={`Tekstlag for side ${page.pageIndex + 1}`}
                       />
 
@@ -2003,7 +2153,11 @@ function App() {
                         {category.annotations.length ? (
                           category.annotations.map((annotation) => {
                             const isSelected = selectedAnnotationId === annotation.id;
-                            const excerpt = getAnnotationExcerpt(annotation, currentSource.sourceText);
+                            const excerpt = getAnnotationLabel(
+                              annotation,
+                              currentSource.sourceText,
+                              annotationNumbers,
+                            );
 
                             return (
                               <article

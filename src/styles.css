@@ -47,7 +47,7 @@ input:focus {
 .app-shell {
   width: min(1520px, calc(100vw - 2rem));
   margin: 0 auto;
-  padding: 2rem 0 3rem;
+  padding: 1.4rem 0 3rem;
 }
 
 .hero,
@@ -65,10 +65,10 @@ input:focus {
 
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 220px;
-  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1fr) 210px;
+  gap: 1.2rem;
   align-items: start;
-  padding: 1.6rem 1.8rem;
+  padding: 1.25rem 1.45rem;
   border-radius: 28px;
   background: rgba(255, 250, 244, 0.8);
   border: 1px solid rgba(16, 33, 53, 0.08);
@@ -114,19 +114,19 @@ input:focus {
 }
 
 .hero h1 {
-  font-size: clamp(2rem, 3.4vw, 3.5rem);
+  font-size: clamp(1.85rem, 3vw, 3.1rem);
   max-width: none;
-  line-height: 1.03;
+  line-height: 1;
 }
 
 .intro {
-  margin: 0.85rem 0 0;
-  max-width: 78ch;
+  margin: 0.65rem 0 0;
+  max-width: 68ch;
   color: #40566f;
 }
 
 .intro-subtle {
-  font-size: 0.98rem;
+  font-size: 0.92rem;
   color: #5d738c;
 }
 
@@ -184,9 +184,9 @@ input:focus {
 
 .setup-grid {
   display: grid;
-  grid-template-columns: 1fr 2fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.8fr);
   gap: 1rem;
-  margin: 1rem 0;
+  margin: 0.85rem 0;
 }
 
 .source-tabs-card {
@@ -202,10 +202,21 @@ input:focus {
   box-shadow: 0 12px 40px rgba(43, 61, 84, 0.08);
 }
 
+.source-tabs-wrap {
+  display: grid;
+  gap: 0.5rem;
+}
+
 .source-tabs {
   display: flex;
   gap: 0.6rem;
   flex-wrap: wrap;
+}
+
+.source-tabs-note {
+  margin: 0;
+  color: #5c738d;
+  font-size: 0.92rem;
 }
 
 .source-tab {
@@ -463,7 +474,7 @@ input:focus {
 }
 
 .analysis-surface {
-  min-height: 520px;
+  min-height: 420px;
   padding: 1.35rem;
   border-radius: 22px;
   background:
@@ -530,12 +541,13 @@ input:focus {
 
 .pdf-text-layer {
   z-index: 2;
-  color: transparent;
-  user-select: text;
-  -webkit-user-select: text;
-  cursor: text;
   pointer-events: auto;
   overflow: hidden;
+}
+
+.pdf-text-layer > .textLayer {
+  position: absolute;
+  inset: 0;
 }
 
 .pdf-text-layer :is(span, br) {
@@ -903,6 +915,26 @@ input:focus {
 
 .timeline-empty p + p {
   margin-top: 0.35rem;
+}
+
+.print-project-header {
+  margin-bottom: 0.28in;
+}
+
+.print-project-header h1,
+.print-project-header p {
+  margin: 0;
+}
+
+.print-project-header h1 {
+  font-family: "Fraunces", Georgia, serif;
+  font-size: 26pt;
+  line-height: 1.05;
+}
+
+.print-project-header p:last-child {
+  margin-top: 0.08in;
+  color: #4b617b;
 }
 
 .print-sheet-header,

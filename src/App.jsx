@@ -9,6 +9,20 @@ const PDF_RENDER_OPTIONS = {
   standardFontDataUrl: `${import.meta.env.BASE_URL}standard_fonts/`,
   useSystemFonts: true,
 };
+const MAX_CATEGORIES = 20;
+const EXTRA_CATEGORY_COLORS = [
+  "#f97316",
+  "#ef4444",
+  "#eab308",
+  "#14b8a6",
+  "#0ea5e9",
+  "#2563eb",
+  "#6366f1",
+  "#8b5cf6",
+  "#ec4899",
+  "#10b981",
+];
+const FOOTER_GITHUB_URL = "https://github.com/lymbots/Kildekritik";
 
 const CATEGORY_LIBRARY = [
   {
@@ -267,6 +281,15 @@ const INITIAL_STATE = {
   activeSourceId: "",
 };
 
+function getValidTextAnnotations(annotations) {
+  return annotations.filter(
+    (annotation) =>
+      annotation.type === "text" &&
+      typeof annotation.start === "number" &&
+      typeof annotation.end === "number",
+  );
+}
+
 function sortAnnotationsForOutput(annotations) {
   return [...annotations].sort((a, b) => {
     if (a.type !== b.type) {
@@ -323,6 +346,15 @@ function getFileTitle(name) {
   return name.replace(/\.[^.]+$/, "").trim();
 }
 
+function resizeTextarea(node) {
+  if (!node) {
+    return;
+  }
+
+  node.style.height = "0px";
+  node.style.height = `${Math.max(node.scrollHeight, 56)}px`;
+}
+
 function getSelectionOffsets(root, selection) {
   if (!root || !selection || selection.rangeCount === 0) {
     return null;
@@ -363,7 +395,7 @@ function splitTextForAnnotations(text, annotations) {
     return [];
   }
 
-  const sorted = [...annotations].sort((a, b) => a.start - b.start);
+  const sorted = getValidTextAnnotations(annotations).sort((a, b) => a.start - b.start);
   const segments = [];
   let cursor = 0;
 
@@ -393,7 +425,7 @@ function splitTextForPrint(text, annotations, annotationNumbers) {
     return [];
   }
 
-  const sorted = sortAnnotationsForOutput(annotations).filter((annotation) => annotation.type === "text");
+  const sorted = getValidTextAnnotations(sortAnnotationsForOutput(annotations));
   const segments = [];
   let cursor = 0;
 
@@ -452,43 +484,6 @@ function getAnnotationLabel(annotation, sourceText, annotationNumbers) {
   }
 
   return "Tekstmarkering";
-}
-
-function getTextPieceSegments(pieceText, pieceStart, annotations) {
-  const relevant = annotations
-    .filter((annotation) => annotation.type === "text")
-    .filter((annotation) => annotation.start < pieceStart + pieceText.length && annotation.end > pieceStart)
-    .sort((a, b) => a.start - b.start);
-
-  if (!relevant.length) {
-    return [{ type: "plain", text: pieceText }];
-  }
-
-  const segments = [];
-  let localCursor = 0;
-
-  relevant.forEach((annotation) => {
-    const start = Math.max(annotation.start - pieceStart, 0);
-    const end = Math.min(annotation.end - pieceStart, pieceText.length);
-
-    if (start > localCursor) {
-      segments.push({ type: "plain", text: pieceText.slice(localCursor, start) });
-    }
-
-    segments.push({
-      type: "annotation",
-      text: pieceText.slice(start, end),
-      annotation,
-    });
-
-    localCursor = end;
-  });
-
-  if (localCursor < pieceText.length) {
-    segments.push({ type: "plain", text: pieceText.slice(localCursor) });
-  }
-
-  return segments;
 }
 
 function getPageFrameFromNode(node) {
@@ -584,7 +579,7 @@ function App() {
   const [openCategoryId, setOpenCategoryId] = useState(CATEGORY_LIBRARY[0].id);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState(null);
   const [draftCategoryName, setDraftCategoryName] = useState("");
-  const [draftCategoryColor, setDraftCategoryColor] = useState("#1d4ed8");
+  const [draftCategoryColor, setDraftCategoryColor] = useState(EXTRA_CATEGORY_COLORS[0]);
   const [statusMessage, setStatusMessage] = useState("");
   const [isImportPanelOpen, setIsImportPanelOpen] = useState(true);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
@@ -596,11 +591,21 @@ function App() {
 
   const sourceSurfaceRef = useRef(null);
   const pdfTextLayerRefs = useRef(new Map());
+  const problemStatementRef = useRef(null);
+  const analysisRef = useRef(analysis);
 
   const currentSource =
     analysis.sources.find((source) => source.id === analysis.activeSourceId) ?? analysis.sources[0];
   const projectTitle = analysis.title.trim();
   const currentDocumentPages = sourceDocuments[analysis.activeSourceId] ?? [];
+
+  useEffect(() => {
+    analysisRef.current = analysis;
+  }, [analysis]);
+
+  useEffect(() => {
+    resizeTextarea(problemStatementRef.current);
+  }, [currentSource.problemStatement, analysis.activeSourceId]);
 
   useEffect(() => {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -617,8 +622,9 @@ function App() {
       }
 
       setAnalysis(parsed);
-      setActiveCategoryId(parsed.sources[0].categories[0].id);
-      setOpenCategoryId(parsed.sources[0].categories[0].id);
+      const restoredSource = parsed.sources.find((source) => source.id === parsed.activeSourceId) ?? parsed.sources[0];
+      setActiveCategoryId(restoredSource.categories[0]?.id ?? CATEGORY_LIBRARY[0].id);
+      setOpenCategoryId(restoredSource.categories[0]?.id ?? CATEGORY_LIBRARY[0].id);
 
       if (parsed.sources.some((source) => source.sourceMode === "pdf")) {
         setStatusMessage("PDF-filer skal importeres igen, hvis du genåbner siden.");
@@ -698,6 +704,20 @@ function App() {
     };
   }, [currentSource.sourceMode, currentDocumentPages, analysis.activeSourceId]);
 
+  useEffect(() => {
+    if (!currentSource.categories.some((category) => category.id === activeCategoryId)) {
+      setActiveCategoryId(currentSource.categories[0]?.id ?? CATEGORY_LIBRARY[0].id);
+    }
+
+    if (openCategoryId && !currentSource.categories.some((category) => category.id === openCategoryId)) {
+      setOpenCategoryId(currentSource.categories[0]?.id ?? CATEGORY_LIBRARY[0].id);
+    }
+
+    if (selectedAnnotationId && !currentSource.annotations.some((annotation) => annotation.id === selectedAnnotationId)) {
+      setSelectedAnnotationId(null);
+    }
+  }, [activeCategoryId, currentSource.annotations, currentSource.categories, openCategoryId, selectedAnnotationId]);
+
   const activeCategory = useMemo(
     () => currentSource.categories.find((category) => category.id === activeCategoryId) ?? currentSource.categories[0],
     [activeCategoryId, currentSource.categories],
@@ -757,7 +777,7 @@ function App() {
   }, [orderedAnnotations]);
 
   const textAnnotations = useMemo(
-    () => visibleAnnotations.filter((annotation) => annotation.type === "text").sort((a, b) => a.start - b.start),
+    () => getValidTextAnnotations(visibleAnnotations).sort((a, b) => a.start - b.start),
     [visibleAnnotations],
   );
 
@@ -846,6 +866,15 @@ function App() {
     setAnalysis((current) => (typeof next === "function" ? next(current) : next));
   }
 
+  function updateSourceById(sourceId, next) {
+    setAnalysis((current) => ({
+      ...current,
+      sources: current.sources.map((source) =>
+        source.id === sourceId ? (typeof next === "function" ? next(source) : next) : source,
+      ),
+    }));
+  }
+
   function updateCurrentSource(next) {
     setAnalysis((current) => ({
       ...current,
@@ -855,10 +884,10 @@ function App() {
     }));
   }
 
-  function setCurrentDocumentPages(nextPages) {
+  function setDocumentPagesForSource(sourceId, nextPages) {
     setSourceDocuments((current) => ({
       ...current,
-      [analysis.activeSourceId]: nextPages,
+      [sourceId]: nextPages,
     }));
   }
 
@@ -877,9 +906,9 @@ function App() {
     }));
   }
 
-  function handleSourceTextChange(value) {
+  function handleSourceTextChange(value, sourceId = analysis.activeSourceId) {
     const normalized = normalizeText(value);
-    updateCurrentSource((source) => ({
+    updateSourceById(sourceId, (source) => ({
       ...source,
       sourceMode: "text",
       sourceText: normalized,
@@ -895,8 +924,11 @@ function App() {
         );
       }),
     }));
-    setCurrentDocumentPages([]);
-    setInteractionMode("select");
+    setDocumentPagesForSource(sourceId, []);
+
+    if (analysisRef.current.activeSourceId === sourceId) {
+      setInteractionMode("select");
+    }
   }
 
   async function handleFileImport(event) {
@@ -906,10 +938,10 @@ function App() {
     if (!file) {
       return;
     }
-    await importProvidedFile(file);
+    await importProvidedFile(file, analysis.activeSourceId);
   }
 
-  async function importProvidedFile(file) {
+  async function importProvidedFile(file, targetSourceId = analysis.activeSourceId) {
     if (!file) {
       return;
     }
@@ -920,7 +952,7 @@ function App() {
       if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
         const pdfData = await loadPdfDocument(file);
 
-        updateCurrentSource((source) => ({
+        updateSourceById(targetSourceId, (source) => ({
           ...source,
           title: source.title.trim() ? source.title : inferredTitle,
           sourceMode: "pdf",
@@ -929,9 +961,12 @@ function App() {
             (annotation) => annotation.type !== "text" && annotation.type !== "region",
           ),
         }));
-        setCurrentDocumentPages(pdfData.pages);
-        setInteractionMode(pdfData.hasAnyText ? "select" : "draw");
-        setIsImportPanelOpen(false);
+        setDocumentPagesForSource(targetSourceId, pdfData.pages);
+
+        if (analysisRef.current.activeSourceId === targetSourceId) {
+          setInteractionMode(pdfData.hasAnyText ? "select" : "draw");
+          setIsImportPanelOpen(false);
+        }
 
         if (pdfData.hasAnyText) {
           setStatusMessage("PDF er importeret.");
@@ -952,12 +987,14 @@ function App() {
         const mammoth = await import("mammoth");
         const buffer = await file.arrayBuffer();
         const result = await mammoth.extractRawText({ arrayBuffer: buffer });
-        handleSourceTextChange(result.value);
-        updateCurrentSource((source) => ({
+        handleSourceTextChange(result.value, targetSourceId);
+        updateSourceById(targetSourceId, (source) => ({
           ...source,
           title: source.title.trim() ? source.title : inferredTitle,
         }));
-        setIsImportPanelOpen(false);
+        if (analysisRef.current.activeSourceId === targetSourceId) {
+          setIsImportPanelOpen(false);
+        }
         setStatusMessage("Word-fil er importeret som tekst.");
         return;
       }
@@ -968,12 +1005,14 @@ function App() {
       }
 
       const text = await file.text();
-      handleSourceTextChange(text);
-      updateCurrentSource((source) => ({
+      handleSourceTextChange(text, targetSourceId);
+      updateSourceById(targetSourceId, (source) => ({
         ...source,
         title: source.title.trim() ? source.title : inferredTitle,
       }));
-      setIsImportPanelOpen(false);
+      if (analysisRef.current.activeSourceId === targetSourceId) {
+        setIsImportPanelOpen(false);
+      }
       setStatusMessage("Tekstfil er importeret.");
     } catch {
       setStatusMessage("Importen mislykkedes. Prøv en anden fil.");
@@ -1169,6 +1208,11 @@ function App() {
       return;
     }
 
+    if (currentSource.categories.length >= MAX_CATEGORIES) {
+      setStatusMessage(`Du kan højst have ${MAX_CATEGORIES} kategorier pr. kilde.`);
+      return;
+    }
+
     const newCategory = {
       id: uid("category"),
       name: trimmedName,
@@ -1186,6 +1230,9 @@ function App() {
     setActiveCategoryId(newCategory.id);
     setOpenCategoryId(newCategory.id);
     setDraftCategoryName("");
+    setDraftCategoryColor(
+      EXTRA_CATEGORY_COLORS[(EXTRA_CATEGORY_COLORS.indexOf(draftCategoryColor) + 1) % EXTRA_CATEGORY_COLORS.length],
+    );
     setStatusMessage("Ny kategori tilføjet.");
   }
 
@@ -1248,9 +1295,9 @@ function App() {
   function printAnalysis() {
     const previousTitle = document.title;
     const safeTitle = projectTitle
-      ? projectTitle.replace(/\s+/g, "_")
+      ? projectTitle.trim().replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, "_")
       : currentSource.title?.trim()
-        ? currentSource.title.trim().replace(/\s+/g, "_")
+        ? currentSource.title.trim().replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, "_")
       : "uden_titel";
     document.title = `Kildekritik_${safeTitle}`;
     window.print();
@@ -1364,7 +1411,7 @@ function App() {
     setIsDragActive(false);
     const file = event.dataTransfer.files?.[0];
     if (file) {
-      await importProvidedFile(file);
+      await importProvidedFile(file, analysis.activeSourceId);
     }
   }
 
@@ -1392,8 +1439,10 @@ function App() {
     setActiveCategoryId(nextSource.categories[0]?.id ?? CATEGORY_LIBRARY[0].id);
     setOpenCategoryId(nextSource.categories[0]?.id ?? CATEGORY_LIBRARY[0].id);
     setSelectedAnnotationId(null);
-    setInteractionMode(nextSource.sourceMode === "pdf" ? "select" : "select");
-    setIsImportPanelOpen(nextSource.sourceMode === "text");
+    const nextPages = sourceDocuments[sourceId] ?? [];
+    const nextPdfHasText = nextPages.some((page) => page.hasText);
+    setInteractionMode(nextSource.sourceMode === "pdf" ? (nextPdfHasText ? "select" : "draw") : "select");
+    setIsImportPanelOpen(nextSource.sourceMode === "text" || (nextSource.sourceMode === "pdf" && !nextPages.length));
   }
 
   function addSource() {
@@ -1410,6 +1459,53 @@ function App() {
     setIsImportPanelOpen(true);
   }
 
+  function deleteSource(sourceId) {
+    if (analysis.sources.length === 1) {
+      setStatusMessage("Der skal altid være mindst én kilde.");
+      return;
+    }
+
+    const sourceIndex = analysis.sources.findIndex((source) => source.id === sourceId);
+    if (sourceIndex === -1) {
+      return;
+    }
+
+    const sourceLabel = analysis.sources[sourceIndex].title?.trim() || `Kilde ${sourceIndex + 1}`;
+    const confirmed = window.confirm(`Slet ${sourceLabel} og alle markeringer til denne kilde?`);
+    if (!confirmed) {
+      return;
+    }
+
+    const remainingSources = analysis.sources.filter((source) => source.id !== sourceId);
+    const nextActiveSource =
+      sourceId === analysis.activeSourceId
+        ? remainingSources[Math.max(0, sourceIndex - 1)] ?? remainingSources[0]
+        : analysis.sources.find((source) => source.id === analysis.activeSourceId) ?? remainingSources[0];
+
+    setAnalysis((current) => ({
+      ...current,
+      sources: current.sources.filter((source) => source.id !== sourceId),
+      activeSourceId: nextActiveSource.id,
+    }));
+    setSourceDocuments((current) => {
+      const next = { ...current };
+      delete next[sourceId];
+      return next;
+    });
+    setActiveCategoryId(nextActiveSource.categories[0]?.id ?? CATEGORY_LIBRARY[0].id);
+    setOpenCategoryId(nextActiveSource.categories[0]?.id ?? CATEGORY_LIBRARY[0].id);
+    setSelectedAnnotationId(null);
+
+    const nextPages = sourceDocuments[nextActiveSource.id] ?? [];
+    const nextPdfHasText = nextPages.some((page) => page.hasText);
+    setInteractionMode(nextActiveSource.sourceMode === "pdf" ? (nextPdfHasText ? "select" : "draw") : "select");
+    setIsImportPanelOpen(
+      nextActiveSource.sourceMode === "text" ||
+        (nextActiveSource.sourceMode === "pdf" && !nextPages.length),
+    );
+    setStatusMessage(`${sourceLabel} blev slettet.`);
+  }
+
   return (
     <div className="app-shell">
       <header className="hero">
@@ -1417,13 +1513,13 @@ function App() {
           <p className="eyebrow">Tekstnær kildekritik</p>
           <h1>Kod kilder direkte i teksten</h1>
           <p className="intro">
-            Vælg en kategori, markér i kilden, og skriv din kommentar i panelet.
+            Importér en kilde, vælg en kategori, og markér de tekststeder, der fungerer som belæg i din analyse. Hver kategori har sin egen farve, så markeringer og kommentarer bindes direkte sammen i analysepanelet.
           </p>
           <p className="intro intro-subtle">
-            Brug PDF med tekstlag, DOCX eller indsæt tekst direkte. Scannede PDF&apos;er markeres manuelt.
+            Når flere markeringer viser et forløb, et brud eller en udvikling, kan du sende dem til tidslinjen og samle dem på tværs af kilder. PDF med tekstlag, DOCX og ren tekst kan bruges direkte, mens scannede PDF&apos;er markeres manuelt.
           </p>
         </div>
-        <div className="hero-actions hero-actions-stacked">
+        <div className="hero-actions hero-actions-grid">
           <button type="button" className="secondary-button" onClick={() => setIsGuideOpen((current) => !current)}>
             {isGuideOpen ? "Skjul guide" : "Åbn guide"}
           </button>
@@ -1442,63 +1538,6 @@ function App() {
           </button>
         </div>
       </header>
-
-      <section className="setup-grid">
-        <label className="field-card">
-          <span className="field-label">Forløb / emne</span>
-          <input
-            value={analysis.title}
-            onChange={(event) => handleFieldChange("projectTitle", event.target.value)}
-            placeholder="Fx: Kold krig og propaganda"
-          />
-        </label>
-
-        <label className="field-card">
-          <span className="field-label">{`Kildetitel · Kilde ${analysis.sources.findIndex((source) => source.id === currentSource.id) + 1}`}</span>
-          <input
-            value={currentSource.title}
-            onChange={(event) => handleFieldChange("title", event.target.value)}
-            placeholder="Fx: Tale af Kennedy"
-          />
-        </label>
-
-        <label className="field-card field-card-wide">
-          <span className="field-label">Problemstilling</span>
-          <textarea
-            value={currentSource.problemStatement}
-            onChange={(event) => handleFieldChange("problemStatement", event.target.value)}
-            placeholder="Hvilket spørgsmål vil du bruge kilden til at undersøge?"
-            rows={3}
-          />
-        </label>
-      </section>
-
-      <section className="source-tabs-card">
-        <div className="source-tabs-wrap">
-          <div>
-            <p className="panel-label">Kilder</p>
-            <p className="source-tabs-note">Tilføj og navngiv de 4-6 kilder, der hører til samme opgave.</p>
-          </div>
-          <div className="source-tabs">
-            {analysis.sources.map((source, index) => (
-              <button
-                key={source.id}
-                type="button"
-                className={["source-tab", source.id === analysis.activeSourceId ? "is-active" : ""]
-                  .filter(Boolean)
-                  .join(" ")}
-                onClick={() => switchSource(source.id)}
-              >
-                {`Kilde ${index + 1}`}
-                {source.title?.trim() ? `: ${source.title.trim()}` : ""}
-              </button>
-            ))}
-          </div>
-        </div>
-        <button type="button" className="secondary-button" onClick={addSource}>
-          Ny kilde
-        </button>
-      </section>
 
       {isGuideOpen ? (
         <section className="guide-card">
@@ -1594,6 +1633,134 @@ function App() {
           )}
         </section>
       ) : null}
+
+      <section className="source-hub">
+        <div className="source-hub-header">
+          <div>
+            <p className="panel-label">Kildeopsætning</p>
+            <h2>Klargør kilderne før analysen</h2>
+            <p className="source-tabs-note">
+              Tilføj de kilder, der hører til opgaven. Du kan tilføje en eller flere og skifte mellem dem undervejs.
+            </p>
+          </div>
+          <button type="button" className="secondary-button" onClick={addSource}>
+            Ny kilde
+          </button>
+        </div>
+
+        <section className="source-tabs-card">
+          <div className="source-tabs-wrap">
+            <div className="source-tabs">
+              {analysis.sources.map((source, index) => (
+                <div
+                  key={source.id}
+                  className={["source-tab-shell", source.id === analysis.activeSourceId ? "is-active" : ""]
+                    .filter(Boolean)
+                    .join(" ")}
+                >
+                  <button type="button" className="source-tab" onClick={() => switchSource(source.id)}>
+                    {`Kilde ${index + 1}`}
+                    {source.title?.trim() ? `: ${source.title.trim()}` : ""}
+                  </button>
+                  {analysis.sources.length > 1 ? (
+                    <button
+                      type="button"
+                      className="source-tab-close"
+                      aria-label={`Slet kilde ${index + 1}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        deleteSource(source.id);
+                      }}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="setup-grid">
+          <label className="field-card">
+            <span className="field-label">Forløb / emne</span>
+            <input
+              value={analysis.title}
+              onChange={(event) => handleFieldChange("projectTitle", event.target.value)}
+              placeholder="Fx: Kold krig og propaganda"
+            />
+          </label>
+
+          <label className="field-card">
+            <span className="field-label">{`Kildetitel · Kilde ${analysis.sources.findIndex((source) => source.id === currentSource.id) + 1}`}</span>
+            <input
+              value={currentSource.title}
+              onChange={(event) => handleFieldChange("title", event.target.value)}
+              placeholder="Fx: Tale af Kennedy"
+            />
+          </label>
+
+          <label className="field-card">
+            <span className="field-label">Problemstilling</span>
+            <textarea
+              className="compact-textarea"
+              ref={problemStatementRef}
+              value={currentSource.problemStatement}
+              onChange={(event) => handleFieldChange("problemStatement", event.target.value)}
+              onInput={(event) => resizeTextarea(event.currentTarget)}
+              placeholder="Hvilket spørgsmål vil du bruge kilden til at undersøge?"
+              rows={1}
+            />
+          </label>
+        </section>
+
+        <section className="import-strip">
+          <div
+            className={["dropzone", isDragActive ? "is-active" : ""].join(" ")}
+            onDragOver={handleDropZoneDragOver}
+            onDragEnter={handleDropZoneDragEnter}
+            onDragLeave={handleDropZoneDragLeave}
+            onDrop={handleDropZoneDrop}
+          >
+            <div className="import-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setIsImportPanelOpen((current) => !current)}
+              >
+                {isImportPanelOpen ? "Skjul import / redigering" : "Vis import / redigering"}
+              </button>
+              <label className="upload-button">
+                Upload tekst, DOCX eller PDF
+                <input
+                  type="file"
+                  accept=".txt,.md,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={handleFileImport}
+                />
+              </label>
+            </div>
+            <div className="dropzone-copy">
+              <strong>Træk en PDF, DOCX eller tekstfil ind her</strong>
+              <p>Uploaden hører til den aktive kilde og kan ændres undervejs.</p>
+            </div>
+          </div>
+          <p className="import-note">
+            PDF med tekstlag kan markeres direkte. Scannede PDF&apos;er markeres manuelt.
+          </p>
+        </section>
+
+        {isImportPanelOpen && currentSource.sourceMode === "text" ? (
+          <label className="field-card source-editor">
+            <span className="field-label">Indsæt eller redigér kilden</span>
+            <textarea
+              value={currentSource.sourceText}
+              onChange={(event) => handleSourceTextChange(event.target.value)}
+              placeholder="Indsæt kilden her."
+              rows={8}
+            />
+          </label>
+        ) : null}
+      </section>
 
       <section className="print-sheet">
         {projectTitle ? (
@@ -1820,53 +1987,6 @@ function App() {
               </div>
             </div>
 
-          <section className="import-strip">
-            <div
-              className={["dropzone", isDragActive ? "is-active" : ""].join(" ")}
-              onDragOver={handleDropZoneDragOver}
-              onDragEnter={handleDropZoneDragEnter}
-              onDragLeave={handleDropZoneDragLeave}
-              onDrop={handleDropZoneDrop}
-            >
-              <div className="import-actions">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => setIsImportPanelOpen((current) => !current)}
-                >
-                  {isImportPanelOpen ? "Skjul import / redigering" : "Vis import / redigering"}
-                </button>
-                <label className="upload-button">
-                  Upload tekst, DOCX eller PDF
-                  <input
-                    type="file"
-                    accept=".txt,.md,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    onChange={handleFileImport}
-                  />
-                </label>
-              </div>
-              <div className="dropzone-copy">
-                <strong>Træk en PDF, DOCX eller tekstfil ind her</strong>
-                <p>Du kan også klikke og vælge en fil.</p>
-              </div>
-            </div>
-            <p className="import-note">
-              PDF med tekstlag kan markeres direkte. Scannede PDF&apos;er markeres manuelt.
-            </p>
-          </section>
-
-          {isImportPanelOpen && currentSource.sourceMode === "text" ? (
-            <label className="field-card source-editor">
-              <span className="field-label">Indsæt eller redigér kilden</span>
-              <textarea
-                value={currentSource.sourceText}
-                onChange={(event) => handleSourceTextChange(event.target.value)}
-                placeholder="Indsæt kilden her."
-                rows={8}
-              />
-            </label>
-          ) : null}
-
           <div className="analysis-surface-card">
             <div className="analysis-toolbar">
               <div>
@@ -2009,6 +2129,15 @@ function App() {
                   </article>
                 ))}
               </div>
+            ) : currentSource.sourceMode === "pdf" ? (
+              <div className="analysis-surface pdf-fallback-state" aria-label="PDF skal importeres igen">
+                <p className="empty-state">
+                  PDF-visningen er ikke aktiv endnu.
+                </p>
+                <p className="empty-state">
+                  Importér PDF&apos;en igen for at se siderne og markere direkte i dokumentet. Dine noter og kategorier er stadig gemt.
+                </p>
+              </div>
             ) : (
               <div ref={sourceSurfaceRef} className="analysis-surface" aria-label="Kildetekst til markering">
                 {textSegments.length ? (
@@ -2054,27 +2183,15 @@ function App() {
         </main>
 
         <aside className="sidebar">
-          <section className="category-builder">
+          <section className="analysis-panel-header">
             <div>
               <p className="panel-label">Kategorier</p>
               <h2>Analysepanel</h2>
+              <p className="guide-note">
+                Vælg en kategori, markér i kilden, og saml dine observationer i kommentarer og samlet analyse.
+              </p>
             </div>
-            <div className="category-builder-controls">
-              <input
-                value={draftCategoryName}
-                onChange={(event) => setDraftCategoryName(event.target.value)}
-                placeholder="Ny kategori"
-              />
-              <input
-                type="color"
-                value={draftCategoryColor}
-                onChange={(event) => setDraftCategoryColor(event.target.value)}
-                aria-label="Farve til ny kategori"
-              />
-              <button type="button" className="secondary-button" onClick={addCategory}>
-                Tilføj
-              </button>
-            </div>
+            <div className="category-count-pill">{`${currentSource.categories.length}/${MAX_CATEGORIES}`}</div>
           </section>
 
           <div className="accordion-list">
@@ -2292,8 +2409,64 @@ function App() {
               placeholder="Skriv din samlede vurdering af kilden her."
             />
           </section>
+
+          <section className="category-adder">
+            <div className="category-adder-head">
+              <div>
+                <p className="panel-label">Ekstra kategori</p>
+                <h3>Tilføj hvis kilden kræver det</h3>
+              </div>
+              <span className="category-count-pill category-count-pill-soft">{`${currentSource.categories.length}/${MAX_CATEGORIES}`}</span>
+            </div>
+            <label className="mini-field">
+              <span>Navn på ny kategori</span>
+              <input
+                value={draftCategoryName}
+                onChange={(event) => setDraftCategoryName(event.target.value)}
+                placeholder="Fx: Begreber, virkemidler eller perspektiv"
+              />
+            </label>
+            <div className="category-color-options" aria-label="Farver til ny kategori">
+              {EXTRA_CATEGORY_COLORS.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  className={["color-swatch", draftCategoryColor === color ? "is-active" : ""].filter(Boolean).join(" ")}
+                  style={{ "--swatch-color": color }}
+                  onClick={() => setDraftCategoryColor(color)}
+                  aria-label={`Vælg farven ${color}`}
+                />
+              ))}
+            </div>
+            <div className="category-adder-actions">
+              <button type="button" className="secondary-button" onClick={addCategory}>
+                Tilføj kategori
+              </button>
+            </div>
+            <p className="category-builder-note">
+              Brug ekstra kategorier sparsomt, så analysen forbliver overskuelig.
+            </p>
+          </section>
         </aside>
       </section>
+
+      <footer className="site-footer">
+        <div className="site-footer-copy">
+          <p className="panel-label">Om siden</p>
+          <p>
+            Udviklet af Asger Krogh til undervisningsrelateret, ikke-kommerciel brug. Værktøjet er målrettet gymnasieelever i historiefaget og er tænkt som støtte til tekstnær og kildekritisk analyse.
+          </p>
+          <p>
+            Siden stilles til rådighed i sin nuværende form uden garanti. Kontakt gerne Asger, hvis du vil bruge siden videre, har forslag eller opdager fejl.
+          </p>
+        </div>
+        <div className="site-footer-links">
+          <a href={FOOTER_GITHUB_URL} target="_blank" rel="noreferrer">
+            GitHub
+          </a>
+          <a href="mailto:Asger.krogh@hotmail.com">Asger.krogh@hotmail.com</a>
+        </div>
+      </footer>
 
     </div>
   );

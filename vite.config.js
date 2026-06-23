@@ -11,6 +11,26 @@ const standardFontsDir = normalizePath(path.join(pdfjsDistPath, "standard_fonts"
 
 export default defineConfig({
   base: "/Kildekritik/",
+  build: {
+    chunkSizeWarningLimit: 650,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/react") || id.includes("node_modules/react-dom")) {
+            return "react-vendor";
+          }
+
+          if (id.includes("node_modules/pdfjs-dist")) {
+            return "pdfjs";
+          }
+
+          if (id.includes("node_modules/mammoth")) {
+            return "mammoth";
+          }
+        },
+      },
+    },
+  },
   plugins: [
     react(),
     viteStaticCopy({
